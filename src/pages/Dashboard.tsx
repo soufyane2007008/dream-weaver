@@ -69,7 +69,10 @@ export default function Dashboard() {
 
         {/* Quick Actions */}
         <div className="grid gap-4 md:grid-cols-3 mb-8">
-          <Card className="card-featured cursor-pointer hover:border-primary" onClick={() => {}}>
+          <Card 
+            className="card-featured cursor-pointer hover:border-primary transition-all" 
+            onClick={() => navigate('/create')}
+          >
             <CardHeader className="flex flex-row items-center gap-4">
               <div className="p-2 rounded-lg bg-primary/10">
                 <Plus className="h-6 w-6 text-primary" />
