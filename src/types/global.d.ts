@@ -20,6 +20,7 @@ export interface NtflyUser {
 // أنواع المشاريع
 export type ProjectStatus = 
   | 'pending' 
+  | 'processing'
   | 'generating' 
   | 'completed' 
   | 'failed' 
@@ -30,6 +31,14 @@ export type ProjectTemplate =
   | 'business' 
   | 'portfolio' 
   | 'store';
+
+export interface ProjectColors {
+  primary?: string;
+  secondary?: string;
+  accent?: string;
+  background?: string;
+  text?: string;
+}
 
 export interface ProjectFile {
   name: string;
@@ -53,13 +62,20 @@ export interface Project {
   description: string;
   template: ProjectTemplate;
   status: ProjectStatus;
-  files: ProjectFile[];
+  files: ProjectFile[] | string[];
+  filesContent?: Record<string, string>;
   logs: ProjectLog[];
   zipUrl: string | null;
+  previewUrl?: string | null;
+  colors?: ProjectColors;
+  options?: Record<string, unknown>;
+  error?: string;
   createdAt: number;
   updatedAt: number;
   generatedAt: number | null;
-  settings: ProjectSettings;
+  completedAt?: number | null;
+  exportedAt?: number | null;
+  settings?: ProjectSettings;
 }
 
 export interface ProjectSettings {

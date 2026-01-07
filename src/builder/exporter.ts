@@ -83,8 +83,8 @@ export async function exportProject(
       const fileName = `projects/${projectId}/site-${Date.now()}.zip`;
       
       try {
-        const uploadResult = await uploadToStorage(blob as unknown as File, fileName, (progress) => {
-          const pct = typeof progress === 'number' ? progress : (progress?.progress || 0);
+        const uploadResult = await uploadToStorage(fileName, blob, (progress) => {
+          const pct = progress.percentage || 0;
           const overallProgress = 70 + Math.round(pct * 0.25);
           onProgress?.({ 
             stage: 'uploading', 

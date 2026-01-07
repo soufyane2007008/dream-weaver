@@ -86,6 +86,10 @@ export async function createProjectRequest(
       ownerId: userId,
       status: 'pending',
       template: payload.templateId,
+      files: [],
+      logs: [],
+      zipUrl: null,
+      generatedAt: null,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       colors: payload.colors,
@@ -96,13 +100,13 @@ export async function createProjectRequest(
     
     // 3. توليد الملفات
     onProgress?.({ 
-      status: 'processing', 
+      status: 'generating', 
       progress: 30, 
       message: 'جارٍ توليد الموقع...', 
       step: 'generating' 
     });
     
-    await updateDocument('projects', projectId, { status: 'processing' });
+    await updateDocument('projects', projectId, { status: 'generating' as const });
     
     const files = generateTemplateById(payload.templateId, {
       title: payload.name,
@@ -112,7 +116,7 @@ export async function createProjectRequest(
     });
     
     onProgress?.({ 
-      status: 'processing', 
+      status: 'generating', 
       progress: 60, 
       message: 'تم توليد الملفات', 
       step: 'generating' 
@@ -120,7 +124,7 @@ export async function createProjectRequest(
     
     // 4. تصدير الـ ZIP
     onProgress?.({ 
-      status: 'processing', 
+      status: 'generating', 
       progress: 70, 
       message: 'جارٍ إنشاء ملف ZIP...', 
       step: 'exporting' 
@@ -131,7 +135,7 @@ export async function createProjectRequest(
       onProgress: (exp: ExportProgress) => {
         const overallProgress = 70 + Math.round(exp.progress * 0.25);
         onProgress?.({ 
-          status: 'processing', 
+          status: 'generating', 
           progress: overallProgress, 
           message: exp.message, 
           step: 'exporting' 
@@ -145,10 +149,11 @@ export async function createProjectRequest(
     
     // 5. تحديث المشروع بالنتائج
     await updateDocument('projects', projectId, {
-      status: 'completed',
+      status: 'completed' as const,
       zipUrl: exportResult.storageUrl || exportResult.downloadUrl,
       files: Object.keys(files),
-      filesContent: files, // حفظ المحتوى للمعاينة
+      filesContent: files,
+      generatedAt: Date.now(),
       completedAt: Date.now(),
       updatedAt: Date.now(),
     });
