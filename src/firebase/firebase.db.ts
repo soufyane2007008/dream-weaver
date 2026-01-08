@@ -58,6 +58,28 @@ export async function getDocument<T>(
   return (collection.get(documentId) as T) || null;
 }
 
+export async function setDocument<T extends Record<string, unknown>>(
+  collectionName: string,
+  documentId: string,
+  data: T
+): Promise<boolean> {
+  const timestamp = Date.now();
+  
+  const docData = {
+    ...data,
+    id: documentId,
+    updatedAt: timestamp,
+  } as T;
+  
+  const collection = getMockCollection(collectionName);
+  collection.set(documentId, docData);
+  saveMockData();
+  notifyDocumentListeners(collectionName, documentId, docData);
+  notifyCollectionListeners(collectionName);
+  
+  return true;
+}
+
 export async function updateDocument<T extends Record<string, unknown>>(
   collectionName: string,
   documentId: string,
