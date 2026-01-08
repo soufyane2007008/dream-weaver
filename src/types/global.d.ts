@@ -4,7 +4,7 @@
  */
 
 // أنواع المستخدمين والأدوار
-export type UserRole = 'admin' | 'user' | 'guest';
+export type UserRole = 'admin' | 'user';
 
 export interface NtflyUser {
   uid: string;
@@ -13,8 +13,9 @@ export interface NtflyUser {
   photoURL: string | null;
   role: UserRole;
   createdAt: number;
-  lastLoginAt: number;
-  isActive: boolean;
+  lastLoginAt?: number;
+  isActive?: boolean;
+  provider?: string;
 }
 
 // أنواع المشاريع
