@@ -1,40 +1,37 @@
 /**
- * خدمات المصادقة Firebase/Mock لمنصة Ntfly
- * يدعم تسجيل الدخول بالبريد وGoogle في الوضع الحقيقي
- * ويحاكي نفس السلوك في وضع Mock باستخدام localStorage
+ * خدمات المصادقة لمنصة Ntfly
+ * يدعم Firebase Auth الحقيقي + وضع Mock للتطوير
+ * يدعم Email/Password + Google + GitHub
  */
 
-import { getMockMode, getMockUsers, saveMockData } from './index';
-import type { NtflyUser, UserRole } from '@/types/global.d';
+import { getMockMode, getMockUsers, saveMockData, ADMIN_EMAIL } from './index';
+import { createDocument, getDocument, updateDocument } from './firebase.db';
 import { v4 as uuidv4 } from 'uuid';
+import type { NtflyUser } from '@/types/global.d';
 
-// نوع المستمع لتغيير حالة المصادقة
+// نوع callback للاستماع لتغييرات المصادقة
 type AuthStateListener = (user: NtflyUser | null) => void;
 
-// المستمعون لتغيير حالة المصادقة
-const authListeners: Set<AuthStateListener> = new Set();
+// مستمعين لتغييرات حالة المصادقة
+const authListeners = new Set<AuthStateListener>();
 
 // المستخدم الحالي
 let currentUser: NtflyUser | null = null;
 
-// مفتاح تخزين الجلسة
+// مفتاح الجلسة
 const SESSION_KEY = 'ntfly_session';
-const ADMIN_ROLES_KEY = 'ntfly_admin_roles';
 
 /**
- * تحميل الجلسة المحفوظة
+ * تحميل جلسة محفوظة
  */
-export function loadSession(): NtflyUser | null {
+function loadSession(): NtflyUser | null {
   try {
     const saved = localStorage.getItem(SESSION_KEY);
     if (saved) {
-      const user = JSON.parse(saved) as NtflyUser;
-      currentUser = user;
-      notifyListeners(user);
-      return user;
+      return JSON.parse(saved);
     }
   } catch {
-    // تجاهل أخطاء التحميل
+    // تجاهل
   }
   return null;
 }
@@ -43,45 +40,35 @@ export function loadSession(): NtflyUser | null {
  * حفظ الجلسة
  */
 function saveSession(user: NtflyUser | null): void {
-  try {
-    if (user) {
-      localStorage.setItem(SESSION_KEY, JSON.stringify(user));
-    } else {
-      localStorage.removeItem(SESSION_KEY);
-    }
-  } catch {
-    // تجاهل أخطاء الحفظ
+  if (user) {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+  } else {
+    localStorage.removeItem(SESSION_KEY);
   }
 }
 
 /**
- * إشعار المستمعين بتغيير حالة المصادقة
+ * إشعار المستمعين بتغيير الحالة
  */
 function notifyListeners(user: NtflyUser | null): void {
-  authListeners.forEach(listener => {
-    try {
-      listener(user);
-    } catch (error) {
-      console.error('خطأ في مستمع المصادقة:', error);
-    }
-  });
+  authListeners.forEach(listener => listener(user));
 }
 
 /**
- * الحصول على دور المستخدم
+ * تحديد دور المستخدم
  */
-function getUserRole(uid: string, email: string): UserRole {
-  // المدير الرئيسي
-  if (email === 'admin@ntfly.dev' || uid === 'admin') {
+function getUserRole(uid: string, email: string): 'admin' | 'user' {
+  // البريد الإلكتروني الثابت للأدمن
+  if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
     return 'admin';
   }
   
-  // التحقق من قائمة المدراء المحفوظة
+  // التحقق من قائمة الأدمن في localStorage (للمستخدمين المضافين)
   try {
-    const adminRoles = localStorage.getItem(ADMIN_ROLES_KEY);
-    if (adminRoles) {
-      const admins = JSON.parse(adminRoles) as string[];
-      if (admins.includes(uid) || admins.includes(email)) {
+    const adminList = localStorage.getItem('ntfly_admin_list');
+    if (adminList) {
+      const admins = JSON.parse(adminList) as string[];
+      if (admins.includes(email.toLowerCase()) || admins.includes(uid)) {
         return 'admin';
       }
     }
@@ -96,83 +83,115 @@ function getUserRole(uid: string, email: string): UserRole {
  * تسجيل الدخول بالبريد وكلمة المرور
  */
 export async function signInWithEmail(
-  email: string, 
+  email: string,
   password: string
 ): Promise<{ user: NtflyUser | null; error: string | null }> {
   if (getMockMode()) {
-    // وضع Mock - محاكاة تسجيل الدخول
     return mockSignIn(email, password);
   }
   
-  // Firebase الحقيقي (يُفعّل عند تثبيت المكتبة)
-  // TODO: إضافة تكامل Firebase Auth
-  return mockSignIn(email, password);
+  try {
+    const { getAuth, signInWithEmailAndPassword } = await import('firebase/auth');
+    const auth = getAuth();
+    const result = await signInWithEmailAndPassword(auth, email, password);
+    
+    const role = getUserRole(result.user.uid, result.user.email || '');
+    
+    const user: NtflyUser = {
+      uid: result.user.uid,
+      email: result.user.email || '',
+      displayName: result.user.displayName,
+      photoURL: result.user.photoURL,
+      role,
+      createdAt: Date.now(),
+      provider: 'password',
+    };
+    
+    // حفظ/تحديث المستخدم في Firestore
+    await saveUserToFirestore(user);
+    
+    currentUser = user;
+    saveSession(user);
+    notifyListeners(user);
+    
+    // تسجيل الدخول
+    await logLogin(user);
+    
+    return { user, error: null };
+    
+  } catch (error) {
+    const message = getAuthErrorMessage(error);
+    return { user: null, error: message };
+  }
 }
 
 /**
- * محاكاة تسجيل الدخول
+ * Mock تسجيل الدخول
  */
 async function mockSignIn(
-  email: string, 
+  email: string,
   password: string
 ): Promise<{ user: NtflyUser | null; error: string | null }> {
-  // محاكاة تأخير الشبكة
-  await new Promise(resolve => setTimeout(resolve, 500));
-  
-  // التحقق من صحة البريد
-  if (!email || !email.includes('@')) {
-    return { user: null, error: 'البريد الإلكتروني غير صالح' };
-  }
-  
-  // التحقق من كلمة المرور (6 أحرف على الأقل)
-  if (!password || password.length < 6) {
-    return { user: null, error: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' };
-  }
-  
+  // التحقق من وجود المستخدم
   const mockUsers = getMockUsers();
+  let existingUser: NtflyUser | null = null;
   
-  // البحث عن المستخدم بالبريد
-  let foundUser = Array.from(mockUsers.values()).find(u => u.email === email);
+  mockUsers.forEach((u) => {
+    if (u.email.toLowerCase() === email.toLowerCase()) {
+      existingUser = {
+        uid: u.uid,
+        email: u.email,
+        displayName: u.displayName,
+        photoURL: u.photoURL,
+        role: getUserRole(u.uid, u.email),
+        createdAt: u.createdAt,
+        provider: 'password',
+      };
+    }
+  });
   
-  if (!foundUser) {
-    // إنشاء مستخدم جديد تلقائياً (للتجربة)
+  // إذا لم يوجد المستخدم، إنشاء حساب جديد
+  if (!existingUser) {
     const uid = uuidv4();
-    foundUser = {
+    const role = getUserRole(uid, email);
+    
+    existingUser = {
       uid,
       email,
       displayName: email.split('@')[0],
       photoURL: null,
+      role,
       createdAt: Date.now(),
+      provider: 'password',
     };
-    mockUsers.set(uid, foundUser);
+    
+    mockUsers.set(uid, {
+      uid,
+      email,
+      displayName: existingUser.displayName,
+      photoURL: null,
+      createdAt: Date.now(),
+      role,
+    });
+    
     saveMockData();
   }
   
-  const role = getUserRole(foundUser.uid, foundUser.email);
+  currentUser = existingUser;
+  saveSession(existingUser);
+  notifyListeners(existingUser);
   
-  const ntflyUser: NtflyUser = {
-    uid: foundUser.uid,
-    email: foundUser.email,
-    displayName: foundUser.displayName,
-    photoURL: foundUser.photoURL,
-    role,
-    createdAt: foundUser.createdAt,
-    lastLoginAt: Date.now(),
-    isActive: true,
-  };
+  // تسجيل الدخول
+  await logLogin(existingUser);
   
-  currentUser = ntflyUser;
-  saveSession(ntflyUser);
-  notifyListeners(ntflyUser);
-  
-  return { user: ntflyUser, error: null };
+  return { user: existingUser, error: null };
 }
 
 /**
  * إنشاء حساب جديد
  */
 export async function signUpWithEmail(
-  email: string, 
+  email: string,
   password: string,
   displayName?: string
 ): Promise<{ user: NtflyUser | null; error: string | null }> {
@@ -180,70 +199,235 @@ export async function signUpWithEmail(
     return mockSignUp(email, password, displayName);
   }
   
-  // Firebase الحقيقي
-  return mockSignUp(email, password, displayName);
+  try {
+    const { getAuth, createUserWithEmailAndPassword, updateProfile } = await import('firebase/auth');
+    const auth = getAuth();
+    const result = await createUserWithEmailAndPassword(auth, email, password);
+    
+    if (displayName) {
+      await updateProfile(result.user, { displayName });
+    }
+    
+    const role = getUserRole(result.user.uid, email);
+    
+    const user: NtflyUser = {
+      uid: result.user.uid,
+      email: result.user.email || '',
+      displayName: displayName || result.user.displayName,
+      photoURL: result.user.photoURL,
+      role,
+      createdAt: Date.now(),
+      provider: 'password',
+    };
+    
+    // حفظ المستخدم في Firestore
+    await saveUserToFirestore(user);
+    
+    currentUser = user;
+    saveSession(user);
+    notifyListeners(user);
+    
+    return { user, error: null };
+    
+  } catch (error) {
+    const message = getAuthErrorMessage(error);
+    return { user: null, error: message };
+  }
 }
 
 /**
- * محاكاة إنشاء حساب
+ * Mock إنشاء حساب
  */
 async function mockSignUp(
-  email: string, 
+  email: string,
   password: string,
   displayName?: string
 ): Promise<{ user: NtflyUser | null; error: string | null }> {
-  await new Promise(resolve => setTimeout(resolve, 500));
-  
-  if (!email || !email.includes('@')) {
-    return { user: null, error: 'البريد الإلكتروني غير صالح' };
-  }
-  
-  if (!password || password.length < 6) {
-    return { user: null, error: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' };
-  }
-  
+  // التحقق من عدم وجود المستخدم مسبقاً
   const mockUsers = getMockUsers();
+  let exists = false;
   
-  // التحقق من عدم وجود المستخدم
-  const exists = Array.from(mockUsers.values()).some(u => u.email === email);
+  mockUsers.forEach((u) => {
+    if (u.email.toLowerCase() === email.toLowerCase()) {
+      exists = true;
+    }
+  });
+  
   if (exists) {
-    return { user: null, error: 'هذا البريد مسجل مسبقاً' };
+    return { user: null, error: 'البريد الإلكتروني مستخدم بالفعل' };
   }
   
   const uid = uuidv4();
-  const now = Date.now();
+  const role = getUserRole(uid, email);
   
-  const mockUser = {
+  const user: NtflyUser = {
     uid,
     email,
     displayName: displayName || email.split('@')[0],
     photoURL: null,
-    createdAt: now,
+    role,
+    createdAt: Date.now(),
+    provider: 'password',
   };
   
-  mockUsers.set(uid, mockUser);
+  mockUsers.set(uid, {
+    uid,
+    email,
+    displayName: user.displayName,
+    photoURL: null,
+    createdAt: Date.now(),
+    role,
+  });
+  
   saveMockData();
   
+  currentUser = user;
+  saveSession(user);
+  notifyListeners(user);
+  
+  return { user, error: null };
+}
+
+/**
+ * تسجيل الدخول بـ Google
+ */
+export async function signInWithGoogle(): Promise<{ user: NtflyUser | null; error: string | null }> {
+  if (getMockMode()) {
+    return mockOAuthSignIn('google');
+  }
+  
+  try {
+    const { getAuth, signInWithPopup, GoogleAuthProvider } = await import('firebase/auth');
+    const auth = getAuth();
+    const provider = new GoogleAuthProvider();
+    const result = await signInWithPopup(auth, provider);
+    
+    const role = getUserRole(result.user.uid, result.user.email || '');
+    
+    const user: NtflyUser = {
+      uid: result.user.uid,
+      email: result.user.email || '',
+      displayName: result.user.displayName,
+      photoURL: result.user.photoURL,
+      role,
+      createdAt: Date.now(),
+      provider: 'google',
+    };
+    
+    await saveUserToFirestore(user);
+    
+    currentUser = user;
+    saveSession(user);
+    notifyListeners(user);
+    
+    await logLogin(user);
+    
+    return { user, error: null };
+    
+  } catch (error) {
+    const message = getAuthErrorMessage(error);
+    return { user: null, error: message };
+  }
+}
+
+/**
+ * تسجيل الدخول بـ GitHub
+ */
+export async function signInWithGitHub(): Promise<{ user: NtflyUser | null; error: string | null }> {
+  if (getMockMode()) {
+    return mockOAuthSignIn('github');
+  }
+  
+  try {
+    const { getAuth, signInWithPopup, GithubAuthProvider } = await import('firebase/auth');
+    const auth = getAuth();
+    const provider = new GithubAuthProvider();
+    const result = await signInWithPopup(auth, provider);
+    
+    const role = getUserRole(result.user.uid, result.user.email || '');
+    
+    const user: NtflyUser = {
+      uid: result.user.uid,
+      email: result.user.email || '',
+      displayName: result.user.displayName,
+      photoURL: result.user.photoURL,
+      role,
+      createdAt: Date.now(),
+      provider: 'github',
+    };
+    
+    await saveUserToFirestore(user);
+    
+    currentUser = user;
+    saveSession(user);
+    notifyListeners(user);
+    
+    await logLogin(user);
+    
+    return { user, error: null };
+    
+  } catch (error) {
+    const message = getAuthErrorMessage(error);
+    return { user: null, error: message };
+  }
+}
+
+/**
+ * Mock OAuth تسجيل الدخول
+ */
+async function mockOAuthSignIn(
+  provider: 'google' | 'github'
+): Promise<{ user: NtflyUser | null; error: string | null }> {
+  // إنشاء مستخدم وهمي للاختبار
+  const uid = uuidv4();
+  const email = `demo-${provider}@ntfly.dev`;
   const role = getUserRole(uid, email);
   
-  const ntflyUser: NtflyUser = {
-    ...mockUser,
+  const user: NtflyUser = {
+    uid,
+    email,
+    displayName: `مستخدم ${provider === 'google' ? 'Google' : 'GitHub'}`,
+    photoURL: null,
     role,
-    lastLoginAt: now,
-    isActive: true,
+    createdAt: Date.now(),
+    provider,
   };
   
-  currentUser = ntflyUser;
-  saveSession(ntflyUser);
-  notifyListeners(ntflyUser);
+  const mockUsers = getMockUsers();
+  mockUsers.set(uid, {
+    uid,
+    email,
+    displayName: user.displayName,
+    photoURL: null,
+    createdAt: Date.now(),
+    role,
+  });
   
-  return { user: ntflyUser, error: null };
+  saveMockData();
+  
+  currentUser = user;
+  saveSession(user);
+  notifyListeners(user);
+  
+  await logLogin(user);
+  
+  return { user, error: null };
 }
 
 /**
  * تسجيل الخروج
  */
 export async function signOut(): Promise<void> {
+  if (!getMockMode()) {
+    try {
+      const { getAuth, signOut: firebaseSignOut } = await import('firebase/auth');
+      const auth = getAuth();
+      await firebaseSignOut(auth);
+    } catch {
+      // تجاهل أخطاء تسجيل الخروج من Firebase
+    }
+  }
+  
   currentUser = null;
   saveSession(null);
   notifyListeners(null);
@@ -253,54 +437,114 @@ export async function signOut(): Promise<void> {
  * الحصول على المستخدم الحالي
  */
 export function getCurrentUser(): NtflyUser | null {
+  if (!currentUser) {
+    currentUser = loadSession();
+  }
   return currentUser;
 }
 
 /**
- * الاشتراك في تغييرات حالة المصادقة
+ * الاستماع لتغييرات حالة المصادقة
  */
 export function onAuthStateChanged(listener: AuthStateListener): () => void {
   authListeners.add(listener);
   
-  // إشعار فوري بالحالة الحالية
-  if (currentUser) {
-    listener(currentUser);
-  } else {
-    // محاولة تحميل الجلسة
-    const saved = loadSession();
-    if (saved) {
-      listener(saved);
-    } else {
-      listener(null);
-    }
-  }
+  // استدعاء فوري بالحالة الحالية
+  const user = getCurrentUser();
+  listener(user);
   
-  // إرجاع دالة إلغاء الاشتراك
+  // دالة إلغاء الاستماع
   return () => {
     authListeners.delete(listener);
   };
 }
 
 /**
- * التحقق من كون المستخدم مديراً
+ * التحقق من كون المستخدم أدمن
  */
 export function isAdmin(): boolean {
-  return currentUser?.role === 'admin';
+  const user = getCurrentUser();
+  if (!user) return false;
+  
+  return user.role === 'admin' || user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 }
 
 /**
- * إضافة مستخدم كمدير (للمدراء فقط)
+ * حفظ المستخدم في Firestore
+ */
+async function saveUserToFirestore(user: NtflyUser): Promise<void> {
+  try {
+    const existing = await getDocument<NtflyUser>('users', user.uid);
+    
+    if (existing) {
+      await updateDocument('users', user.uid, {
+        displayName: user.displayName,
+        photoURL: user.photoURL,
+        lastLoginAt: Date.now(),
+      });
+    } else {
+      await createDocument('users', user, user.uid);
+    }
+  } catch (error) {
+    console.warn('فشل حفظ المستخدم:', error);
+  }
+}
+
+/**
+ * تسجيل عملية الدخول
+ */
+async function logLogin(user: NtflyUser): Promise<void> {
+  try {
+    await createDocument('login_logs', {
+      uid: user.uid,
+      email: user.email,
+      provider: user.provider,
+      timestamp: Date.now(),
+      isAdmin: user.role === 'admin',
+    });
+  } catch (error) {
+    console.warn('فشل تسجيل الدخول:', error);
+  }
+}
+
+/**
+ * ترجمة أخطاء المصادقة
+ */
+function getAuthErrorMessage(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = (error as { code: string }).code;
+    
+    const messages: Record<string, string> = {
+      'auth/email-already-in-use': 'البريد الإلكتروني مستخدم بالفعل',
+      'auth/invalid-email': 'البريد الإلكتروني غير صالح',
+      'auth/user-disabled': 'تم تعطيل هذا الحساب',
+      'auth/user-not-found': 'المستخدم غير موجود',
+      'auth/wrong-password': 'كلمة المرور غير صحيحة',
+      'auth/weak-password': 'كلمة المرور ضعيفة جداً',
+      'auth/popup-closed-by-user': 'تم إلغاء عملية تسجيل الدخول',
+      'auth/cancelled-popup-request': 'تم إلغاء الطلب',
+      'auth/network-request-failed': 'فشل الاتصال بالشبكة',
+    };
+    
+    return messages[code] || 'حدث خطأ أثناء المصادقة';
+  }
+  
+  return 'حدث خطأ غير متوقع';
+}
+
+/**
+ * إضافة مستخدم كأدمن (للأدمن الحالي فقط)
  */
 export function addAdmin(uidOrEmail: string): boolean {
   if (!isAdmin()) return false;
   
   try {
-    const adminRoles = localStorage.getItem(ADMIN_ROLES_KEY);
-    const admins = adminRoles ? JSON.parse(adminRoles) as string[] : [];
+    const adminList = localStorage.getItem('ntfly_admin_list');
+    const admins = adminList ? JSON.parse(adminList) : [];
     
-    if (!admins.includes(uidOrEmail)) {
-      admins.push(uidOrEmail);
-      localStorage.setItem(ADMIN_ROLES_KEY, JSON.stringify(admins));
+    if (!admins.includes(uidOrEmail.toLowerCase())) {
+      admins.push(uidOrEmail.toLowerCase());
+      localStorage.setItem('ntfly_admin_list', JSON.stringify(admins));
     }
     
     return true;
@@ -310,19 +554,23 @@ export function addAdmin(uidOrEmail: string): boolean {
 }
 
 /**
- * إزالة مستخدم من المدراء
+ * إزالة مستخدم من الأدمن (للأدمن الحالي فقط)
  */
 export function removeAdmin(uidOrEmail: string): boolean {
   if (!isAdmin()) return false;
-  if (uidOrEmail === 'admin@ntfly.dev') return false; // لا يمكن إزالة المدير الرئيسي
+  
+  // لا يمكن إزالة الأدمن الرئيسي
+  if (uidOrEmail.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+    return false;
+  }
   
   try {
-    const adminRoles = localStorage.getItem(ADMIN_ROLES_KEY);
-    if (!adminRoles) return true;
-    
-    const admins = JSON.parse(adminRoles) as string[];
-    const filtered = admins.filter(a => a !== uidOrEmail);
-    localStorage.setItem(ADMIN_ROLES_KEY, JSON.stringify(filtered));
+    const adminList = localStorage.getItem('ntfly_admin_list');
+    if (adminList) {
+      const admins = JSON.parse(adminList) as string[];
+      const filtered = admins.filter(a => a !== uidOrEmail.toLowerCase());
+      localStorage.setItem('ntfly_admin_list', JSON.stringify(filtered));
+    }
     
     return true;
   } catch {

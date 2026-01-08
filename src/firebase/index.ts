@@ -1,26 +1,41 @@
 /**
- * الملف الرئيسي لـ Firebase - يدير التهيئة والتحول لوضع Mock
- * يعمل تلقائياً في وضع Mock إذا لم تكن مفاتيح Firebase موجودة
+ * الملف الرئيسي لـ Firebase - يدير التهيئة الديناميكية والتحول لوضع Mock
+ * يدعم تغيير الإعدادات من لوحة التحكم بدون إعادة تحميل الكود
  */
 
-import { firebaseConfig, isFirebaseConfigured, isMockMode } from './firebase.config';
+import { 
+  firebaseConfig, 
+  isFirebaseConfigured, 
+  isMockMode, 
+  saveFirebaseConfig,
+  reloadConfig,
+  type FirebaseConfig 
+} from './firebase.config';
 
 // حالة التهيئة
 let isInitialized = false;
 let mockModeEnabled = false;
+let firebaseApp: unknown = null;
 
 // Mock data stores
 const mockUsers = new Map<string, MockUser>();
 const mockCollections = new Map<string, Map<string, unknown>>();
 const mockStorage = new Map<string, Blob>();
 
-interface MockUser {
+export interface MockUser {
   uid: string;
   email: string;
   displayName: string | null;
   photoURL: string | null;
   createdAt: number;
+  role?: 'user' | 'admin';
+  provider?: string;
 }
+
+/**
+ * البريد الإلكتروني الثابت للأدمن
+ */
+export const ADMIN_EMAIL = 'lrsoufyane2007@gmail.com';
 
 /**
  * تهيئة Firebase بشكل آمن
@@ -28,6 +43,9 @@ interface MockUser {
  */
 export async function safeInitializeFirebase(): Promise<boolean> {
   if (isInitialized) return !mockModeEnabled;
+  
+  // إعادة تحميل الإعدادات
+  reloadConfig();
   
   if (!isFirebaseConfigured()) {
     console.info('📦 Ntfly: Firebase غير مُعَد - تفعيل وضع Mock');
@@ -41,30 +59,40 @@ export async function safeInitializeFirebase(): Promise<boolean> {
   }
   
   try {
-    // هنا يتم تهيئة Firebase الحقيقي
-    // ملاحظة: لتفعيل Firebase الحقيقي، أضف مكتبة firebase وفك التعليقات
-    /*
-    const { initializeApp } = await import('firebase/app');
-    const app = initializeApp(firebaseConfig);
-    console.info('✅ Ntfly: تم تهيئة Firebase بنجاح');
-    */
+    // محاولة تهيئة Firebase الحقيقي ديناميكياً
+    const firebaseAppModule = await import('firebase/app');
+    const { initializeApp, getApps, getApp } = firebaseAppModule;
     
-    // حالياً نستخدم Mock حتى مع وجود الإعدادات للاختبار
-    console.info('📦 Ntfly: وضع Mock نشط (Firebase SDK غير مُثبّت)');
-    mockModeEnabled = true;
+    if (getApps().length === 0) {
+      firebaseApp = initializeApp(firebaseConfig);
+      console.info('✅ Ntfly: تم تهيئة Firebase بنجاح');
+    } else {
+      firebaseApp = getApp();
+    }
+    
+    mockModeEnabled = false;
     isInitialized = true;
-    window.__NTFLY_MOCK_MODE__ = true;
-    initializeMockStore();
-    return false;
+    window.__NTFLY_MOCK_MODE__ = false;
+    return true;
     
   } catch (error) {
-    console.error('❌ Ntfly: فشل تهيئة Firebase:', error);
+    console.warn('⚠️ Ntfly: تعذر تحميل Firebase SDK، تفعيل وضع Mock:', error);
     mockModeEnabled = true;
     isInitialized = true;
     window.__NTFLY_MOCK_MODE__ = true;
     initializeMockStore();
     return false;
   }
+}
+
+/**
+ * إعادة تهيئة Firebase بإعدادات جديدة
+ */
+export async function reinitializeFirebase(config: FirebaseConfig): Promise<boolean> {
+  saveFirebaseConfig(config);
+  isInitialized = false;
+  firebaseApp = null;
+  return safeInitializeFirebase();
 }
 
 /**
@@ -99,10 +127,11 @@ function initializeMockStore(): void {
   if (!mockUsers.has('admin')) {
     mockUsers.set('admin', {
       uid: 'admin',
-      email: 'admin@ntfly.dev',
-      displayName: 'مدير النظام',
+      email: ADMIN_EMAIL,
+      displayName: 'مدير النظام - Soufyane',
       photoURL: null,
       createdAt: Date.now(),
+      role: 'admin',
     });
   }
 }
@@ -137,6 +166,13 @@ export function getMockMode(): boolean {
 }
 
 /**
+ * الحصول على تطبيق Firebase
+ */
+export function getFirebaseApp(): unknown {
+  return firebaseApp;
+}
+
+/**
  * الحصول على مخزن المستخدمين Mock
  */
 export function getMockUsers(): Map<string, MockUser> {
@@ -163,4 +199,4 @@ export function getMockStorage(): Map<string, Blob> {
 /**
  * إعادة تصدير الدوال الرئيسية
  */
-export { isFirebaseConfigured, isMockMode, firebaseConfig };
+export { isFirebaseConfigured, isMockMode, firebaseConfig, saveFirebaseConfig };
