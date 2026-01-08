@@ -1,8 +1,8 @@
 /**
  * إعدادات Firebase الديناميكية لمنصة Ntfly
- * تُحمل الإعدادات من لوحة التحكم (localStorage) أو من متغيرات البيئة
- * يتحول تلقائياً لوضع Mock إذا لم تتوفر إعدادات
  */
+
+import { STORAGE_KEY } from './constants';
 
 export interface FirebaseConfig {
   apiKey: string;
@@ -14,13 +14,10 @@ export interface FirebaseConfig {
   measurementId?: string;
 }
 
-const STORAGE_KEY = 'ntfly_firebase_config';
-
 /**
- * تحميل الإعدادات من localStorage أولاً، ثم من متغيرات البيئة
+ * تحميل الإعدادات
  */
 function loadConfig(): FirebaseConfig {
-  // أولاً: محاولة تحميل من localStorage (إعدادات لوحة التحكم)
   try {
     const savedConfig = localStorage.getItem(STORAGE_KEY);
     if (savedConfig) {
@@ -30,10 +27,9 @@ function loadConfig(): FirebaseConfig {
       }
     }
   } catch {
-    // تجاهل أخطاء التحميل
+    // تجاهل
   }
   
-  // ثانياً: تحميل من متغيرات البيئة
   return {
     apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
     authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
@@ -45,12 +41,8 @@ function loadConfig(): FirebaseConfig {
   };
 }
 
-// الإعدادات الحالية
 export let firebaseConfig: FirebaseConfig = loadConfig();
 
-/**
- * التحقق من وجود إعدادات Firebase صالحة
- */
 export function isFirebaseConfigured(): boolean {
   return Boolean(
     firebaseConfig.apiKey &&
@@ -59,16 +51,10 @@ export function isFirebaseConfigured(): boolean {
   );
 }
 
-/**
- * الحصول على حالة وضع Mock
- */
 export function isMockMode(): boolean {
   return !isFirebaseConfigured();
 }
 
-/**
- * حفظ إعدادات Firebase في localStorage
- */
 export function saveFirebaseConfig(config: FirebaseConfig): boolean {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
@@ -79,27 +65,16 @@ export function saveFirebaseConfig(config: FirebaseConfig): boolean {
   }
 }
 
-/**
- * مسح إعدادات Firebase
- */
 export function clearFirebaseConfig(): void {
   localStorage.removeItem(STORAGE_KEY);
   firebaseConfig = loadConfig();
 }
 
-/**
- * إعادة تحميل الإعدادات
- */
 export function reloadConfig(): FirebaseConfig {
   firebaseConfig = loadConfig();
   return firebaseConfig;
 }
 
-/**
- * الحصول على الإعدادات الحالية
- */
 export function getFirebaseConfig(): FirebaseConfig {
   return firebaseConfig;
 }
-
-export default firebaseConfig;
